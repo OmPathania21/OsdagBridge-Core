@@ -2180,7 +2180,7 @@ class BridgeGrillageModel:
 
         Handles Fig. 6B case 1 (undivided carriageway, footpath on both sides
         or none) and case 2 (undivided carriageway, footpath on one side).
-        Median decks (case 3) create no SV cases yet.
+        Median decks are handled by _add_sv_median_load_cases().
 
         Parameters
         ----------
@@ -2201,8 +2201,7 @@ class BridgeGrillageModel:
 
         layout = self.layout
         if not layout.has_component("carriageway"):
-            print("Special Vehicle: median deck (Fig. 6B case 3) not handled yet; no SV cases created.")
-            return self.sv_load_cases_list
+            return self._add_sv_median_load_cases(model)
 
         n_footpaths = sum(
             layout.has_component(name) for name in ("footpath_left", "footpath_right")
@@ -2237,6 +2236,82 @@ class BridgeGrillageModel:
 
             self.sv_load_cases_list.append(lc)
             self.sv_vehicles_by_case[lc_name] = [vehicle]
+
+        return self.sv_load_cases_list
+
+    def _add_sv_median_load_cases(self, model):
+        """
+        Median deck: the SV on one carriageway at centre ±300 mm, and each
+        Table 6A vehicle mix on the other carriageway, repeated with the SV on
+        each side.  The deck is one grillage with no structural gap, which
+        cl_204_5_3_sv_placement() reports as Fig. 6B case 5; Fig. 6B places
+        the SV the same way for cases 3, 4 and 5.
+
+        Load cases are named e.g. ``"SV-L +300 | R: 2xClassA"`` (SV on the
+        left carriageway, two Class A on the right).  The SV carries no factor
+        (Cl.204.5.4); the vehicles on the other carriageway are ordinary live
+        load and keep their lane reduction and impact factors, applied per
+        vehicle so the case itself is registered at 1.0.
+
+        Called by add_sv_load_cases(); fills the same stores it does.
+        """
+        cws = {side: self.layout.get_component(f"carriageway_{side}")
+               for side in ("left", "right")}
+
+        placement = IRC6_2017.cl_204_5_3_sv_placement(
+            cws["left"].width, include_median="yes")
+        if not placement.get("sv_applicable"):
+            print(f"Special Vehicle: not applicable — {placement.get('reason', '')}")
+            return self.sv_load_cases_list
+
+        eccentricity_m = abs(placement["eccentricity_mm"]) / 1000.0
+        # IRC 6:2017 Table 6A lane reduction and Cl.208.3 impact, for the
+        # non-SV carriageway only — same factors as the Table 6A vehicle cases.
+        alf = list(LANE_REDUCTION_FACTORS)
+        dla = 1.0 + IRC6_2017.cl_208_3_impact_factor(self.L)
+
+        for sv_side, other_side in (("left", "right"), ("right", "left")):
+            sv_cw, other_cw = cws[sv_side], cws[other_side]
+
+            n_lanes = IRC6_2017.table_6(other_cw.width)
+            lane_w = other_cw.width / n_lanes
+            lane_z = [other_cw.z_start + (i + 0.5) * lane_w for i in range(n_lanes)]
+
+            for combo in IRC6_2017.table_6A(other_cw.width)["vehicle_combinations"]:
+                # Class A takes one lane, Class 70R two — same order as
+                # vehicle_lane_coordinates().
+                others, lane = [], 0
+                for _ in range(combo.get("ClassA", 0)):
+                    others.append(("ClassA", lane_z[lane]))
+                    lane += 1
+                for _ in range(combo.get("Class70R", 0)):
+                    others.append(("Class70R", (lane_z[lane] + lane_z[lane + 1]) / 2))
+                    lane += 2
+                summary = " + ".join(f"{n}x{t}" for t, n in combo.items())
+
+                for sign, label in ((1, "+300"), (-1, "-300")):
+                    lc_name = f"SV-{sv_side[0].upper()} {label} | {other_side[0].upper()}: {summary}"
+                    lc = og.create_load_case(name=lc_name)
+
+                    sv = og.create_load_model(model_type="SV").create()
+                    sv.set_global_coord(og.Point(0.0, 0.0, sv_cw.center + sign * eccentricity_m))
+                    lc.add_load(load=sv)
+                    self.vehicle_type_map[id(sv)] = "SV"
+                    vehicles, count = [sv], {}
+
+                    for vehicle_type, z in others:
+                        i = count.get(vehicle_type, 0)
+                        count[vehicle_type] = i + 1
+                        lane_factor = alf[i] if i < len(alf) else 1.0
+                        v = og.create_load_model(model_type=vehicle_type.upper()).create()
+                        v.set_global_coord(og.Point(0.0, 0.0, z))
+                        lc.add_load(load=v, load_factor=lane_factor * dla)
+                        self.vehicle_type_map[id(v)] = vehicle_type
+                        vehicles.append(v)
+
+                    model.add_load_case(lc, load_factor=1.0)
+                    self.sv_load_cases_list.append(lc)
+                    self.sv_vehicles_by_case[lc_name] = vehicles
 
         return self.sv_load_cases_list
 

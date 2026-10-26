@@ -137,10 +137,12 @@ def classify_loadcases(loadcases) -> dict:
             fatigue_cases.append(lc)
             continue
 
-        # Special Vehicle (IRC:6 Cl.204.5) — "SV +300", "SV -300", ... Matched
-        # early for the same reason as Fatigue: these names hit none of the
-        # rules below and would otherwise fall through to the dead-load bucket.
-        if name_lower.startswith("sv "):
+        # Special Vehicle (IRC:6 Cl.204.5) — "SV +300", "SV -300", and on median
+        # decks "SV-L +300 | R: 2xClassA", ... Matched early: plain SV names hit
+        # none of the rules below and would fall through to the dead-load
+        # bucket, and the median names contain "classa"/"70r" and would be
+        # mistaken for Table 6A live-load cases.
+        if name_lower.startswith(("sv ", "sv-")):
             sv_cases.append(lc)
             continue
 
