@@ -2998,6 +2998,121 @@ class BridgeGrillageModel:
         return created
 
     # ============================================================
+    #   Special Vehicle Load Combinations  (IRC:6-2017 Cl.204.5.4)
+    # ============================================================
+
+    def _build_sv_combination(self, model, prefix, n, sv_lc, dl_f, dw_f, sv_f, ll_f):
+        """
+        Create and register one Special Vehicle combination:
+        ``dl_f·DL + dw_f·DW + sv_f·SVn``, where any Class A / 70R in the SV
+        load case (other carriageway of a median deck) take ``ll_f``.
+
+        Unlike ``_copy_loads`` in the ULS/SLS builders, each SV-case load keeps
+        the factor it was registered with (1.0 on the SV, lane reduction ×
+        impact on the non-SV vehicles), multiplied by the combination factor.
+
+        Parameters
+        ----------
+        prefix : str
+            Combination name prefix, e.g. ``"BASIC_SV1_1"``.
+        n : int
+            SV case number used in the name (``SV1``, ``SV2``, ...).
+        sv_lc : LoadCase
+            One entry of ``self.sv_load_cases_list``.
+        dl_f, dw_f, sv_f, ll_f : float
+            Factors on dead load, surfacing, the SV and the non-SV vehicles.
+
+        Returns
+        -------
+        LoadCase
+            The registered combination load case.
+        """
+        has_other = any(e["load"].name != "Special Vehicle" for e in sv_lc.load_groups)
+        terms = [f"{dl_f}DL", f"{dw_f}DW", f"{sv_f}SV{n}"] + ([f"{ll_f}LL"] if has_other else [])
+        combo = og.create_load_case(name=f"{prefix}: " + " + ".join(terms))
+
+        for src, fac in ((getattr(self, "dead_load_combination", None), dl_f),
+                         (getattr(self, "wearing_course_load", None), dw_f)):
+            if src is None:
+                continue
+            for entry in src.load_groups:
+                combo.add_load(entry["load"], load_factor=float(fac))
+
+        for entry in sv_lc.load_groups:
+            f = sv_f if entry["load"].name == "Special Vehicle" else ll_f
+            combo.add_load(entry["load"], load_factor=float(f) * entry["factor"])
+
+        model.add_load_case(combo)
+        print(f"  Created: {combo.name}")
+        return combo
+
+    def create_sv_uls_combinations(self, model=None):
+        """
+        Creates the ULS load combinations with the Special Vehicle per
+        IRC:6-2017 Cl.204.5.4, one set for each SV load case in
+        ``self.sv_load_cases_list``.
+
+        Combinations produced per SV case ``n``
+        ----------------------------------------
+        BASIC_SVn_1, BASIC_SVn_2  (adding, relieving)
+            DL / DW from Table B.2 basic, SV × 1.15 (Cl.204.5.4).
+        ACCIDENTAL_SVn_1 … ACCIDENTAL_SVn_3  (one per accidental event)
+            DL = DW = 1.0, SV × 0.75 — the same three events as
+            create_uls_combinations(); the event loads have no model load
+            case, so they are omitted as there.
+
+        Wind, temperature and seismic are not combined with the SV
+        (Cl.204.5.4). Class A / 70R on the other carriageway of a median deck
+        take their own live-load factors as accompanying loads to the SV.
+
+        The combinations are appended to ``self.uls_combinations`` so the
+        ULS envelope includes them. Call after create_uls_combinations().
+
+        Returns
+        -------
+        list
+            The created SV ULS combinations (empty when there are no SV cases).
+        """
+        model = model or self.model
+        if model is None:
+            raise ValueError("Model is not available. Create model before adding loads.")
+
+        sv_cases = getattr(self, "sv_load_cases_list", None) or []
+        if not sv_cases:
+            return []
+
+        γ = IRC6_2017.table_B2
+        sv_basic = IRC6_2017.cl_204_5_4_sv_load_factor('basic')
+        # SV accidental factor per project instruction, taken as the Table B.2
+        # accidental live-load-leading value.
+        sv_acc = γ('live_load', 'leading', 'accidental')
+        # Class A / 70R on the other carriageway of a median deck keep their
+        # own live-load factors, as accompanying loads to the SV.
+        ll_basic = γ('live_load', 'accompanying', 'basic')
+        ll_acc = γ('live_load', 'accompanying', 'accidental')
+
+        print("ULS Special Vehicle combinations:")
+        created = []
+        for n, sv_lc in enumerate(sv_cases, start=1):
+            for seq, direction in enumerate(('adding', 'relieving'), start=1):
+                created.append(self._build_sv_combination(
+                    model, f"BASIC_SV{n}_{seq}", n, sv_lc,
+                    dl_f=γ('dead_load', direction, 'basic'),
+                    dw_f=γ('surfacing', direction, 'basic'),
+                    sv_f=sv_basic, ll_f=ll_basic))
+            for seq, _event in enumerate(
+                    ('vehicle_collision', 'barge_impact', 'floating_bodies'), start=1):
+                created.append(self._build_sv_combination(
+                    model, f"ACCIDENTAL_SV{n}_{seq}", n, sv_lc,
+                    dl_f=γ('dead_load', 'adding', 'accidental'),
+                    dw_f=γ('surfacing', 'adding', 'accidental'),
+                    sv_f=sv_acc, ll_f=ll_acc))
+
+        print(f"\nTotal ULS Special Vehicle combinations created: {len(created)}")
+        self.uls_combinations = list(getattr(self, "uls_combinations", None) or []) + created
+        return created
+
+    # ============================================================
     #   SLS Load Combinations  (IRC:6-2017 Table B.3)
     # ============================================================
 
