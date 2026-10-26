@@ -3277,6 +3277,60 @@ class BridgeGrillageModel:
         self.sls_combinations = created
         return created
 
+    def create_sv_sls_combinations(self, model=None):
+        """
+        Creates the SLS load combinations with the Special Vehicle per
+        IRC:6-2017 Cl.204.5.4, one set for each SV load case in
+        ``self.sv_load_cases_list``.
+
+        Combinations produced per SV case ``n``
+        ----------------------------------------
+        SLS_RARE_SVn_1, SLS_RARE_SVn_2          (surfacing adding, relieving)
+            DL 1.0, DW 1.2 / 1.0 (Table B.3), SV × 1.0 (Cl.204.5.4).
+        SLS_FREQUENT_SVn_1, SLS_FREQUENT_SVn_2  (surfacing adding, relieving)
+            DL 1.0, DW 1.2 / 1.0 (Table B.3), SV × 0.75 (Cl.204.5.4).
+
+        No quasi-permanent SV combination. Wind and temperature are not
+        combined with the SV. Class A / 70R on the other carriageway of a
+        median deck take their own accompanying live-load factors.
+
+        The combinations are appended to ``self.sls_combinations`` so the
+        SLS envelope includes them. Call after create_sls_combinations().
+
+        Returns
+        -------
+        list
+            The created SV SLS combinations (empty when there are no SV cases).
+        """
+        model = model or self.model
+        if model is None:
+            raise ValueError("Model is not available. Create model before adding loads.")
+
+        sv_cases = getattr(self, "sv_load_cases_list", None) or []
+        if not sv_cases:
+            return []
+
+        γ = IRC6_2017.table_B3
+        sv_f = {c: IRC6_2017.cl_204_5_4_sv_load_factor(c) for c in ('rare', 'frequent')}
+        # Class A / 70R on the other carriageway of a median deck keep their
+        # own live-load factors, as accompanying loads to the SV.
+        ll_f = {c: γ('live_load', 'accompanying', c) for c in ('rare', 'frequent')}
+
+        print("SLS Special Vehicle combinations:")
+        created = []
+        for n, sv_lc in enumerate(sv_cases, start=1):
+            for combo_type, prefix in (('rare', 'SLS_RARE_SV'), ('frequent', 'SLS_FREQUENT_SV')):
+                for seq, direction in enumerate(('adding', 'relieving'), start=1):
+                    created.append(self._build_sv_combination(
+                        model, f"{prefix}{n}_{seq}", n, sv_lc,
+                        dl_f=γ('dead_load', None, combo_type),
+                        dw_f=γ('surfacing', direction, combo_type),
+                        sv_f=sv_f[combo_type], ll_f=ll_f[combo_type]))
+
+        print(f"\nTotal SLS Special Vehicle combinations created: {len(created)}")
+        self.sls_combinations = list(getattr(self, "sls_combinations", None) or []) + created
+        return created
+
     def analyze(self, model=None):
 
         model = model or self.model
