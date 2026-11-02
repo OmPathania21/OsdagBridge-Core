@@ -689,6 +689,11 @@ class PlateGirderBridge:
         
         sls = self.create_sls_combinations()
 
+        if getattr(self.grillage_model, "sv_load_cases_list", None):
+            bridge_logger.sub_step("Creating Special Vehicle ULS and SLS combinations...")
+            self.create_sv_uls_combinations()
+            self.create_sv_sls_combinations()
+
         self.output_dict[KEY_ALL_LOAD_COMBINATIONS] = self._all_load_combinations(uls + sls)
 
     def _stage_cad_generation(self):
@@ -2442,6 +2447,38 @@ class PlateGirderBridge:
         """
         included = self._combination_keys(lambda k: ".sls." in k)
         return self.grillage_model.create_sls_combinations(included_keys=included)
+
+    def create_sv_uls_combinations(self) -> list:
+        """
+        Create the Special Vehicle ULS combinations per IRC:6-2017 Cl.204.5.4
+        (basic and accidental, one set per SV load case).
+
+        Must be called after create_uls_combinations() so the SV combinations
+        are appended to the existing ULS list.
+
+        Delegates to BridgeGrillageModel.create_sv_uls_combinations().
+
+        Returns
+        -------
+        list — ospgrillage load-case objects registered with the model.
+        """
+        return self.grillage_model.create_sv_uls_combinations()
+
+    def create_sv_sls_combinations(self) -> list:
+        """
+        Create the Special Vehicle SLS combinations per IRC:6-2017 Cl.204.5.4
+        (rare and frequent, one set per SV load case).
+
+        Must be called after create_sls_combinations() so the SV combinations
+        are appended to the existing SLS list.
+
+        Delegates to BridgeGrillageModel.create_sv_sls_combinations().
+
+        Returns
+        -------
+        list — ospgrillage load-case objects registered with the model.
+        """
+        return self.grillage_model.create_sv_sls_combinations()
 
     def _all_load_combinations(self, built: list) -> list:
         """
