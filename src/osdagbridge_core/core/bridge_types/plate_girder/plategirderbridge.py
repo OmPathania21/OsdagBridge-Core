@@ -47,6 +47,7 @@ from osdagbridge_core.core.utils.common import (
     KEY_INCLUDE_MEDIAN,
     KEY_FOOTPATH,
     KEY_LL_IRC_CLASS_SV,
+    KEY_BL_IRC_CLASS_SV,
     KEY_TS_FOOTPATH_WIDTH,
     KEY_RAILING_WIDTH,
     KEY_SKEW_ANGLE,
@@ -679,6 +680,9 @@ class PlateGirderBridge:
 
         bridge_logger.sub_step("Creating braking load case...")
         self.create_braking_load_case()
+
+        if getattr(self.grillage_model, "sv_load_cases_list", None):
+            self.create_sv_braking_load_case()
 
         bridge_logger.sub_step("Creating DL+LL combination...")
         self.create_dl_ll_combination(dl_factor=1.0, ll_factor=1.0)
@@ -2214,16 +2218,52 @@ class PlateGirderBridge:
             The created ``"Braking Load"`` case, or None when no governing
             live-load case is available.
         """
+        return self.grillage_model.create_braking_load_case(
+            eccentricity=self._braking_eccentricity())
+
+    def create_sv_braking_load_case(self):
+        """
+        Create the unfactored ``"Braking Load SV"`` case for the Special Vehicle
+        (IRC:6 Cl.204.5), only when "Class SV" is ticked under "Braking Load
+        from Vehicles" (``KEY_BL_IRC_CLASS_SV``) in Additional Inputs.
+
+        Built like ``"Braking Load"``: Fx = 20% of the SV's total vertical load
+        (Cl.211.2) with the couple Mz = Fx × e (Cl.211.3), shared equally
+        between the main girder nodes, using the same eccentricity input.
+
+        Must be called after add_live_loads() has created the SV load cases.
+
+        Delegates to BridgeGrillageModel.create_sv_braking_load_case().
+
+        Returns
+        -------
+        LoadCase or None
+            The created ``"Braking Load SV"`` case, or None when SV braking is
+            not ticked or no SV load case exists.
+        """
+        bl_flag = self.input_dict.get(KEY_BL_IRC_CLASS_SV)
+        if not (bl_flag is True or str(bl_flag).strip().lower() in ("1", "true", "yes", "checked")):
+            bridge_logger.info("Braking Load SV not included (Class SV braking not ticked).")
+            return None
+
+        bridge_logger.sub_step("Creating Special Vehicle braking load case...")
+        return self.grillage_model.create_sv_braking_load_case(
+            eccentricity=self._braking_eccentricity())
+
+    def _braking_eccentricity(self) -> float | None:
+        """
+        Height of the braking force above the deck (m), from ``KEY_LL_ECCENTRICITY``
+        ("Eccentricity from top of Deck"); None when absent or not numeric, so the
+        grillage model falls back to the IRC 1.2 m value.
+        """
         ecc_raw = self.additional_inputs.get(KEY_LL_ECCENTRICITY)
         try:
-            eccentricity = float(ecc_raw) if ecc_raw not in (None, "") else None
+            return float(ecc_raw) if ecc_raw not in (None, "") else None
         except (TypeError, ValueError):
             bridge_logger.info(
                 f"Braking eccentricity {ecc_raw!r} is not numeric; using the IRC default."
             )
-            eccentricity = None
-
-        return self.grillage_model.create_braking_load_case(eccentricity=eccentricity)
+            return None
 
     def analyze(self):
         """

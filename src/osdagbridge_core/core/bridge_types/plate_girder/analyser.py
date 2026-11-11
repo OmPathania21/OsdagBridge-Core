@@ -103,6 +103,7 @@ class BridgeGrillageModel:
 
         # -------------------- BRAKING LOAD (IRC:6 Cl.211) --------------------
         self.braking_load_case = None                  # "Braking Load" — from the governing LL case
+        self.sv_braking_load_case = None               # "Braking Load SV" — only when SV braking is ticked
 
         # self.geometry = GeometryDefinitions(self.L, self.w, self.model)
 
@@ -2409,6 +2410,99 @@ class BridgeGrillageModel:
             )
             return None
 
+        BL, Fx_total, n_nodes = self._build_braking_load_case(
+            model, "Braking Load", W_kN, eccentricity)
+        self.braking_load_case = BL
+
+        print(
+            f"Braking Load from governing {self.governing_ll_name}: "
+            f"vehicle {governing_type} W={W_kN:.2f} kN  "
+            f"Fx={Fx_total / 1000:.2f} kN  "
+            f"Mz={Fx_total * eccentricity / 1000:.2f} kNm "
+            f"(e={eccentricity:.2f} m) over {n_nodes} girder nodes"
+        )
+
+        # Solve only the new case — see create_governing_ll_load_case() for why
+        # a bare analyze() here would be wasted work.
+        model.analyze(load_case=[BL.name])
+
+        return BL
+
+    def create_sv_braking_load_case(self, model=None, eccentricity: float | None = None):
+        """
+        Creates the ``"Braking Load SV"`` load case for the Special Vehicle
+        (IRC:6-2017 Cl.204.5), built the same way as ``"Braking Load"`` for
+        Class A / 70R:
+
+            ``Fx = 0.20 × W_SV``       (Cl.211.2 — the SV is the only train on
+                                        its carriageway, so 20% of it is the
+                                        whole braking force)
+            ``Mz = Fx × eccentricity`` (Cl.211.3 — Fx acts 1.2 m above the deck)
+
+        shared equally between the main girder nodes and registered unfactored.
+        Like the Class A / 70R braking case it is not added to any combination.
+
+        Must be called after add_sv_load_cases(); does nothing when no SV load
+        case was created (SV not ticked or not applicable).
+
+        Parameters
+        ----------
+        model : Grillage, optional
+            Target model; defaults to ``self.model``.
+        eccentricity : float, optional
+            Height of the braking force above the top of the deck (m). Defaults
+            to ``IRC6_2017.cl_211_3_braking_force_location()`` (1.2 m).
+
+        Returns
+        -------
+        LoadCase or None
+            The created ``"Braking Load SV"`` load case, or ``None`` when there
+            is no SV load case.
+        """
+        model = model or self.model
+        if model is None:
+            raise ValueError("Model not created yet.")
+
+        self.sv_braking_load_case = None
+        if not getattr(self, "sv_load_cases_list", None):
+            return None
+
+        if eccentricity is None:
+            eccentricity = IRC6_2017.cl_211_3_braking_force_location()["height_m"]
+
+        W_kN = self._vehicle_total_weight_kN("SV")
+        if W_kN <= 0:
+            warnings.warn("create_sv_braking_load_case: no SV weight available; skipping.")
+            return None
+
+        BL, Fx_total, n_nodes = self._build_braking_load_case(
+            model, "Braking Load SV", W_kN, eccentricity)
+        self.sv_braking_load_case = BL
+
+        print(
+            f"Braking Load SV: vehicle SV W={W_kN:.2f} kN  "
+            f"Fx={Fx_total / 1000:.2f} kN  "
+            f"Mz={Fx_total * eccentricity / 1000:.2f} kNm "
+            f"(e={eccentricity:.2f} m) over {n_nodes} girder nodes"
+        )
+
+        # Solve only the new case, as for "Braking Load".
+        model.analyze(load_case=[BL.name])
+
+        return BL
+
+    def _build_braking_load_case(self, model, name, W_kN, eccentricity):
+        """
+        Build and register an unfactored braking load case ``name`` for a
+        vehicle of total weight ``W_kN``: Fx = 0.20 × W (Cl.211.2) with the
+        couple Mz = Fx × eccentricity (Cl.211.3), shared equally between the
+        main girder nodes.
+
+        Returns
+        -------
+        tuple
+            ``(load_case, Fx_total_N, n_girder_nodes)``.
+        """
         Fx_total = 0.20 * W_kN * kN  # N
 
         # -------------------------------------------------
@@ -2431,7 +2525,7 @@ class BridgeGrillageModel:
 
         Fx = Fx_total / len(girder_tags)  # N — equal share per girder node
 
-        BL = og.create_load_case(name="Braking Load")
+        BL = og.create_load_case(name=name)
         for tag in girder_tags:
             BL.add_load(og.create_load(
                 loadtype="nodal", node_tag=tag,
@@ -2441,21 +2535,7 @@ class BridgeGrillageModel:
 
         # Unfactored: no load_factor argument.
         model.add_load_case(BL)
-        self.braking_load_case = BL
-
-        print(
-            f"Braking Load from governing {self.governing_ll_name}: "
-            f"vehicle {governing_type} W={W_kN:.2f} kN  "
-            f"Fx={Fx_total / 1000:.2f} kN  "
-            f"Mz={Fx_total * eccentricity / 1000:.2f} kNm "
-            f"(e={eccentricity:.2f} m) over {len(girder_tags)} girder nodes"
-        )
-
-        # Solve only the new case — see create_governing_ll_load_case() for why
-        # a bare analyze() here would be wasted work.
-        model.analyze(load_case=[BL.name])
-
-        return BL
+        return BL, Fx_total, len(girder_tags)
 
     def create_governing_ll_load_case(self, dataset, model=None, partial_safety_factor: float = 1.0):
         """
