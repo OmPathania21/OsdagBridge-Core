@@ -1689,7 +1689,8 @@ class BridgeGrillageModel:
     #   Live Load
     # ============================================================
 
-    def vehicle_lane_coordinates(self, include_70r_wheeled=True, include_70r_tracked=True):
+    def vehicle_lane_coordinates(self, include_70r_wheeled=True, include_70r_tracked=True,
+                                 include_class_a=True):
         """
         Calculates vehicle-to-coordinate mappings for all combinations
         as per IRC:6-2017 Table 6 and Table 6A.
@@ -1834,6 +1835,21 @@ class BridgeGrillageModel:
             base_cases.append(case)
 
         result_cases = base_cases + tracked_cases
+
+        # UI selection — Class A unticked: drop it from every combination,
+        # then drop cases left empty or identical to an earlier one.
+        if not include_class_a:
+            kept, seen = [], set()
+            for case in result_cases:
+                combos = {k: v for k, v in case['combinations'].items() if k != 'ClassA'}
+                sig = tuple(sorted((k, tuple(map(tuple, v))) for k, v in combos.items()))
+                if not combos or sig in seen:
+                    continue
+                seen.add(sig)
+                case['combinations'] = combos
+                kept.append(case)
+            result_cases = kept
+
         for n, case in enumerate(result_cases, start=1):
             case['case_num'] = n
 
@@ -1914,7 +1930,8 @@ class BridgeGrillageModel:
 
     def add_vehicle_load_cases_from_combinations(self, model=None,
                                                  include_70r_wheeled=True,
-                                                 include_70r_tracked=True):
+                                                 include_70r_tracked=True,
+                                                 include_class_a=True):
         """
         Create vehicle load cases using coordinates from vehicle_lane_coordinates().
 
@@ -1931,7 +1948,8 @@ class BridgeGrillageModel:
         if model is None:
             raise ValueError("Model not created yet.")
 
-        vehicle_cases = self.vehicle_lane_coordinates(include_70r_wheeled, include_70r_tracked)
+        vehicle_cases = self.vehicle_lane_coordinates(include_70r_wheeled, include_70r_tracked,
+                                                      include_class_a)
 
         # -------------------------------------------------
         # Reset stores
